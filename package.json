@@ -1,0 +1,14 @@
+{
+  "name": "jdr-overlay-bot",
+  "version": "1.0.0",
+  "description": "Bot Discord + overlay Electron pour mise en scène JDR (images, vidéos, audio en couches indépendantes)",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.14.1",
+    "dotenv": "^16.4.5",
+    "ws": "^8.16.0"
+  }
+}

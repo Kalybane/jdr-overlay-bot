@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Overlay JDR</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100vw;
+    height: 100vh;
+    background: transparent;
+    overflow: hidden;
+  }
+
+  #visual-layer {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 800ms ease;
+  }
+
+  #visual-layer.visible {
+    opacity: 1;
+  }
+
+  #visual-layer img,
+  #visual-layer video {
+    display: block;
+    border-radius: 12px;
+  }
+</style>
+</head>
+<body>
+
+  <div id="visual-layer"></div>
+
+  <!-- Deux éléments audio pour permettre le crossfade -->
+  <audio id="audio-a" style="display:none;"></audio>
+  <audio id="audio-b" style="display:none;"></audio>
+
+  <script>
+    // ─────────────────────────────────────────────
+    // ÉTAT DES DEUX COUCHES (indépendantes)
+    // ─────────────────────────────────────────────
+    const state = {
+      visual: {
+        currentUrl: null,
+        clearTimer: null,
+        settings: {
+          sizePx: 420,
+          posX: null, // null = centré
+          posY: null,
+          durationMs: 8000,
+          fadeMs: 800,
+        },
+      },
+      audio: {
+        currentUrl: null,
+        activePlayer: 'a', // 'a' ou 'b', alterne à chaque changement de piste
+        volume: 1, // 0 à 1
+      },
+    };
+
+    const visualLayer = document.getElementById('visual-layer');
+    const audioPlayers = {
+      a: document.getElementById('audio-a'),
+      b: document.getElementById('audio-b'),
+    };
+
+    // Informe le process principal (tray) du statut de connexion,
+    // sans plus rien afficher à l'écran
+    function reportStatus(status) {
+      if (window.electronAPI && window.electronAPI.setConnectionStatus) {
+        window.electronAPI.setConnectionStatus(status);
+      }
+    }
+
+    // ─────────────────────────────────────────────
+    // COUCHE VISUELLE (image / vidéo)
+    // ─────────────────────────────────────────────
+
+    // Calcule la taille de la "boîte" dans laquelle l'image/vidéo doit s'inscrire,
+    // en respectant les proportions (portrait ou paysage) sans jamais dépasser l'écran.
+    function computeBoxSize(sizePx) {
+      const maxW = window.innerWidth * 0.92;
+      const maxH = window.innerHeight * 0.92;
+      return Math.min(sizePx, maxW, maxH);
+    }
+
+    function applyBoxSize(el, sizePx) {
+      const box = computeBoxSize(sizePx);
+      el.style.width = box + 'px';
+      el.style.height = box + 'px';
+      el.style.objectFit = 'contain';
+      el.style.maxWidth = 'none';
+      el.style.maxHeight = 'none';
+    }
+
+    function showVisual(payload) {
+      clearTimeout(state.visual.clearTimer);
+      const s = state.visual.settings;
+
+      const renderNew = () => {
+        visualLayer.classList.remove('visible');
+        visualLayer.style.transition = `opacity ${s.fadeMs}ms ease`;
+
+        if (s.posX !== null && s.posY !== null) {
+          visualLayer.style.left = s.posX + 'px';
+          visualLayer.style.top = s.posY + 'px';
+          visualLayer.style.transform = 'none';
+        } else {
+          visualLayer.style.left = '50%';
+          visualLayer.style.top = '50%';
+          visualLayer.style.transform = 'translate(-50%, -50%)';
+        }
+
+        visualLayer.innerHTML = '';
+
+        let el;
+        if (payload.kind === 'video') {
+          el = document.createElement('video');
+          el.src = payload.url;
+          el.autoplay = true;
+          el.muted = false;
+          el.loop = false;
+          el.onended = () => clearVisual();
+        } else {
+          el = document.createElement('img');
+          el.src = payload.url;
+          state.visual.clearTimer = setTimeout(clearVisual, s.durationMs);
+        }
+
+        applyBoxSize(el, s.sizePx);
+
+        visualLayer.appendChild(el);
+        state.visual.currentUrl = payload.url;
+
+        // Force un reflow pour que la transition d'opacité s'applique bien
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            visualLayer.classList.add('visible');
+          });
+        });
+      };
+
+      if (state.visual.currentUrl) {
+        // Fade-out du précédent avant d'afficher le nouveau
+        visualLayer.classList.remove('visible');
+        setTimeout(renderNew, s.fadeMs);
+      } else {
+        renderNew();
+      }
+    }
+
+    function clearVisual() {
+      clearTimeout(state.visual.clearTimer);
+      const s = state.visual.settings;
+      visualLayer.classList.remove('visible');
+      setTimeout(() => {
+        visualLayer.innerHTML = '';
+        state.visual.currentUrl = null;
+      }, s.fadeMs);
+    }
+
+    function updateVisualSettings(newSettings) {
+      Object.assign(state.visual.settings, newSettings);
+      // Applique immédiatement taille/position à l'élément affiché, si présent
+      const s = state.visual.settings;
+      visualLayer.style.transition = `opacity ${s.fadeMs}ms ease`;
+      if (s.posX !== null && s.posY !== null) {
+        visualLayer.style.left = s.posX + 'px';
+        visualLayer.style.top = s.posY + 'px';
+        visualLayer.style.transform = 'none';
+      } else {
+        visualLayer.style.left = '50%';
+        visualLayer.style.top = '50%';
+        visualLayer.style.transform = 'translate(-50%, -50%)';
+      }
+      const el = visualLayer.firstElementChild;
+      if (el) {
+        applyBoxSize(el, s.sizePx);
+      }
+    }
+
+    // ─────────────────────────────────────────────
+    // COUCHE AUDIO (avec crossfade + volume + file d'attente)
+    // ─────────────────────────────────────────────
+    const CROSSFADE_DURATION = 3500; // ms — fondu entre deux pistes
+    const PAUSE_FADE_DURATION = 1200; // ms — fondu sur pause/reprise
+
+    // Fonction générique : fait varier le volume d'un lecteur audio en douceur
+    function fadeVolume(player, toVolume, durationMs, onDone) {
+      const steps = 30;
+      const stepTime = durationMs / steps;
+      const fromVolume = player.volume;
+      let i = 0;
+
+      const interval = setInterval(() => {
+        i++;
+        const progress = i / steps;
+        player.volume = Math.max(0, Math.min(1, fromVolume + (toVolume - fromVolume) * progress));
+        if (i >= steps) {
+          clearInterval(interval);
+          player.volume = toVolume;
+          if (onDone) onDone();
+        }
+      }, stepTime);
+    }
+
+    function playAudio(payload) {
+      const fromKey = state.audio.activePlayer;
+      const toKey = fromKey === 'a' ? 'b' : 'a';
+
+      const fromPlayer = audioPlayers[fromKey];
+      const toPlayer = audioPlayers[toKey];
+
+      if (typeof payload.volume === 'number') {
+        state.audio.volume = payload.volume;
+      }
+      const targetVolume = state.audio.volume;
+
+      toPlayer.src = payload.url;
+      toPlayer.volume = 0;
+      toPlayer.currentTime = 0;
+
+      const playPromise = toPlayer.play();
+      if (playPromise) playPromise.catch(() => {});
+
+      fadeVolume(toPlayer, targetVolume, CROSSFADE_DURATION);
+      if (!fromPlayer.paused) {
+        fadeVolume(fromPlayer, 0, CROSSFADE_DURATION, () => {
+          fromPlayer.pause();
+          fromPlayer.currentTime = 0;
+        });
+      }
+
+      state.audio.activePlayer = toKey;
+      state.audio.currentUrl = payload.url;
+    }
+
+    function clearAudio() {
+      audioPlayers.a.pause();
+      audioPlayers.b.pause();
+      audioPlayers.a.currentTime = 0;
+      audioPlayers.b.currentTime = 0;
+      state.audio.currentUrl = null;
+    }
+
+    function pauseAudio() {
+      const activePlayer = audioPlayers[state.audio.activePlayer];
+      fadeVolume(activePlayer, 0, PAUSE_FADE_DURATION, () => {
+        activePlayer.pause();
+      });
+    }
+
+    function resumeAudio() {
+      const activePlayer = audioPlayers[state.audio.activePlayer];
+      const playPromise = activePlayer.play();
+      if (playPromise) playPromise.catch(() => {});
+      fadeVolume(activePlayer, state.audio.volume, PAUSE_FADE_DURATION);
+    }
+
+    function setAudioVolume(vol) {
+      state.audio.volume = vol;
+      const activePlayer = audioPlayers[state.audio.activePlayer];
+      activePlayer.volume = vol;
+    }
+
+    // Fade-out doux de la piste en cours (déclenché juste avant que le bot
+    // envoie la piste suivante de la file d'attente)
+    function fadeOutCurrentAudio() {
+      const activePlayer = audioPlayers[state.audio.activePlayer];
+      fadeVolume(activePlayer, 0, CROSSFADE_DURATION, () => {
+        activePlayer.pause();
+        activePlayer.currentTime = 0;
+      });
+    }
+
+    // ─────────────────────────────────────────────
+    // CONNEXION WEBSOCKET
+    // ─────────────────────────────────────────────
+    function connect() {
+      const ws = new WebSocket(window.__WS_URL__);
+
+      ws.onopen = () => {
+        ws.send(JSON.stringify({ type: 'auth', password: window.__WS_PASSWORD__ }));
+      };
+
+      ws.onmessage = (event) => {
+        let data;
+        try {
+          data = JSON.parse(event.data);
+        } catch {
+          return;
+        }
+
+        if (data.type === 'auth_ok') {
+          reportStatus('connected');
+          return;
+        }
+        if (data.type === 'auth_error') {
+          reportStatus('disconnected');
+          return;
+        }
+
+        if (data.type === 'settings' && data.layer === 'visual') {
+          updateVisualSettings(data.settings);
+          return;
+        }
+
+        if (data.type === 'volume' && data.layer === 'audio') {
+          setAudioVolume(data.volume);
+          return;
+        }
+
+        if (data.type === 'fadeout_next' && data.layer === 'audio') {
+          fadeOutCurrentAudio();
+          return;
+        }
+
+        if (data.type === 'media') {
+          if (data.layer === 'visual') {
+            showVisual(data);
+          } else if (data.layer === 'audio') {
+            playAudio(data);
+          }
+        }
+
+        if (data.type === 'clear') {
+          if (data.layer === 'visual') clearVisual();
+          if (data.layer === 'audio') clearAudio();
+        }
+
+        if (data.type === 'pause' && data.layer === 'audio') pauseAudio();
+        if (data.type === 'resume' && data.layer === 'audio') resumeAudio();
+      };
+
+      ws.onclose = () => {
+        reportStatus('disconnected');
+        setTimeout(connect, 3000);
+      };
+
+      ws.onerror = () => {
+        ws.close();
+      };
+    }
+
+    // On attend que main.js ait injecté __WS_URL__ / __WS_PASSWORD__
+    window.addEventListener('overlay-config-ready', connect);
+  </script>
+
+</body>
+</html>

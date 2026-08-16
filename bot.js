@@ -1,0 +1,336 @@
+require('dotenv').config();
+const { Client, GatewayIntentBits, Partials } = require('discord.js');
+const { WebSocketServer } = require('ws');
+const http = require('http');
+
+// ─────────────────────────────────────────────
+// CONFIG
+// ─────────────────────────────────────────────
+const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
+const OVERLAY_CHANNEL_NAME = process.env.OVERLAY_CHANNEL_NAME || 'overlay-media-jdr';
+const WS_PASSWORD = process.env.WS_PASSWORD;
+const PORT = process.env.PORT || 3000;
+
+if (!DISCORD_TOKEN || !WS_PASSWORD) {
+  console.error('❌ DISCORD_TOKEN et WS_PASSWORD sont requis dans .env');
+  process.exit(1);
+}
+
+// ─────────────────────────────────────────────
+// DÉTECTION DU TYPE DE FICHIER → COUCHE (LAYER)
+// ─────────────────────────────────────────────
+const VISUAL_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'mp4', 'webm', 'mov'];
+const AUDIO_EXTENSIONS = ['mp3', 'wav', 'ogg', 'flac', 'm4a'];
+
+function getFileExtension(filename) {
+  return filename.split('.').pop().toLowerCase();
+}
+
+function detectLayer(filename) {
+  const ext = getFileExtension(filename);
+  if (VISUAL_EXTENSIONS.includes(ext)) return 'visual';
+  if (AUDIO_EXTENSIONS.includes(ext)) return 'audio';
+  return null; // type non supporté, on ignore
+}
+
+function isImage(filename) {
+  const ext = getFileExtension(filename);
+  return ['png', 'jpg', 'jpeg', 'webp'].includes(ext);
+}
+
+function isVideo(filename) {
+  const ext = getFileExtension(filename);
+  return ['mp4', 'webm', 'mov'].includes(ext);
+}
+
+// ─────────────────────────────────────────────
+// RÉGLAGES VISUELS (taille, position, durée, fade)
+// ─────────────────────────────────────────────
+const SIZE_PRESETS = {
+  petit: 250,
+  moyen: 500,
+  grand: 850,
+  enorme: 1300,
+};
+
+const visualSettings = {
+  sizePx: SIZE_PRESETS.moyen,
+  posX: null, // null = centré
+  posY: null,
+  durationMs: 8000,
+  fadeMs: 2000,
+};
+
+// ─────────────────────────────────────────────
+// FILE D'ATTENTE AUDIO
+// ─────────────────────────────────────────────
+const audioQueue = []; // { url, filename, author }
+let audioVolume = 100; // 0-100
+let currentlyPlaying = false;
+
+function enqueueAudio(track) {
+  audioQueue.push(track);
+  if (!currentlyPlaying) {
+    playNextInQueue();
+  }
+}
+
+function playNextInQueue() {
+  const next = audioQueue.shift();
+  if (!next) {
+    currentlyPlaying = false;
+    return;
+  }
+  currentlyPlaying = true;
+  broadcast({
+    type: 'media',
+    layer: 'audio',
+    kind: 'audio',
+    url: next.url,
+    filename: next.filename,
+    author: next.author,
+    volume: audioVolume / 100,
+    timestamp: Date.now(),
+  });
+  console.log(`📤 Média envoyé → couche "audio": ${next.filename} (file d'attente: ${audioQueue.length} restante(s))`);
+}
+
+// ─────────────────────────────────────────────
+// SERVEUR HTTP + WEBSOCKET
+// ─────────────────────────────────────────────
+const server = http.createServer();
+const wss = new WebSocketServer({ server });
+
+// clients authentifiés (apps Electron connectées)
+const clients = new Set();
+
+wss.on('connection', (ws) => {
+  let authenticated = false;
+  ws.isAlive = true;
+
+  // Le navigateur (Electron) répond automatiquement aux pings par un pong,
+  // sans code particulier à écrire côté client.
+  ws.on('pong', () => {
+    ws.isAlive = true;
+  });
+
+  ws.on('message', (raw) => {
+    let data;
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      return;
+    }
+
+    // Authentification obligatoire au premier message
+    if (!authenticated) {
+      if (data.type === 'auth' && data.password === WS_PASSWORD) {
+        authenticated = true;
+        clients.add(ws);
+        ws.send(JSON.stringify({ type: 'auth_ok' }));
+        // On envoie les réglages actuels dès la connexion,
+        // pour que l'overlay soit à jour même après une reconnexion
+        ws.send(JSON.stringify({ type: 'settings', layer: 'visual', settings: visualSettings }));
+        console.log('✅ Client Electron authentifié');
+      } else {
+        ws.send(JSON.stringify({ type: 'auth_error' }));
+        ws.close();
+      }
+      return;
+    }
+  });
+
+  ws.on('close', () => {
+    clients.delete(ws);
+    console.log('🔌 Client déconnecté');
+  });
+});
+
+// Heartbeat : envoie un ping toutes les 25s à chaque client connecté.
+// Ça empêche les hébergeurs (Render, etc.) de considérer la connexion
+// comme inactive et de la couper automatiquement.
+const HEARTBEAT_INTERVAL = 25000;
+
+setInterval(() => {
+  wss.clients.forEach((ws) => {
+    if (ws.isAlive === false) {
+      console.log('💀 Client sans réponse au ping, fermeture forcée');
+      return ws.terminate();
+    }
+    ws.isAlive = false;
+    ws.ping();
+  });
+}, HEARTBEAT_INTERVAL);
+
+function broadcast(payload) {
+  const message = JSON.stringify(payload);
+  for (const client of clients) {
+    if (client.readyState === client.OPEN) {
+      client.send(message);
+    }
+  }
+}
+
+server.listen(PORT, () => {
+  console.log(`🌐 Serveur WebSocket en écoute sur le port ${PORT}`);
+});
+
+// ─────────────────────────────────────────────
+// BOT DISCORD
+// ─────────────────────────────────────────────
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+  ],
+  partials: [Partials.Message, Partials.Channel],
+});
+
+client.once('ready', () => {
+  console.log(`🤖 Bot connecté en tant que ${client.user.tag}`);
+});
+
+client.on('messageCreate', async (message) => {
+  if (message.author.bot) return;
+  if (message.channel.name !== OVERLAY_CHANNEL_NAME) return;
+
+  // ── Commandes texte ──
+  const content = message.content.trim();
+  const [cmd, ...args] = content.split(/\s+/);
+
+  if (cmd === '!clear') {
+    broadcast({ type: 'clear', layer: 'visual' });
+    return;
+  }
+
+  // ── Réglages IMAGE ──
+  if (cmd === '!taille') {
+    const preset = SIZE_PRESETS[args[0]?.toLowerCase()];
+    if (!preset) {
+      message.reply(`Taille invalide. Choix possibles : ${Object.keys(SIZE_PRESETS).join(', ')}`);
+      return;
+    }
+    visualSettings.sizePx = preset;
+    broadcast({ type: 'settings', layer: 'visual', settings: visualSettings });
+    return;
+  }
+
+  if (cmd === '!pos') {
+    if (args[0]?.toLowerCase() === 'centre') {
+      visualSettings.posX = null;
+      visualSettings.posY = null;
+    } else {
+      const x = parseInt(args[0], 10);
+      const y = parseInt(args[1], 10);
+      if (Number.isNaN(x) || Number.isNaN(y)) {
+        message.reply('Usage : `!pos X Y` (en pixels) ou `!pos centre`');
+        return;
+      }
+      visualSettings.posX = x;
+      visualSettings.posY = y;
+    }
+    broadcast({ type: 'settings', layer: 'visual', settings: visualSettings });
+    return;
+  }
+
+  if (cmd === '!duree') {
+    const seconds = parseFloat(args[0]);
+    if (Number.isNaN(seconds) || seconds <= 0) {
+      message.reply('Usage : `!duree N` (en secondes)');
+      return;
+    }
+    visualSettings.durationMs = seconds * 1000;
+    broadcast({ type: 'settings', layer: 'visual', settings: visualSettings });
+    return;
+  }
+
+  if (cmd === '!fade') {
+    const seconds = parseFloat(args[0]);
+    if (Number.isNaN(seconds) || seconds < 0) {
+      message.reply('Usage : `!fade N` (en secondes, ex: 1.5)');
+      return;
+    }
+    visualSettings.fadeMs = seconds * 1000;
+    broadcast({ type: 'settings', layer: 'visual', settings: visualSettings });
+    return;
+  }
+
+  // ── Réglages AUDIO ──
+  if (cmd === '!volume') {
+    const vol = parseInt(args[0], 10);
+    if (Number.isNaN(vol) || vol < 0 || vol > 100) {
+      message.reply('Usage : `!volume N` (entre 0 et 100)');
+      return;
+    }
+    audioVolume = vol;
+    broadcast({ type: 'volume', layer: 'audio', volume: audioVolume / 100 });
+    return;
+  }
+
+  if (cmd === '!clearmusique' || cmd === '!stopmusique') {
+    audioQueue.length = 0; // on vide aussi la file d'attente
+    currentlyPlaying = false;
+    broadcast({ type: 'clear', layer: 'audio' });
+    return;
+  }
+
+  if (cmd === '!pause') {
+    broadcast({ type: 'pause', layer: 'audio' });
+    return;
+  }
+
+  if (cmd === '!resume') {
+    broadcast({ type: 'resume', layer: 'audio' });
+    return;
+  }
+
+  if (cmd === '!suivant' || cmd === '!skip') {
+    // Fait un fade-out de la piste en cours puis passe à la suivante dans la file
+    broadcast({ type: 'fadeout_next', layer: 'audio' });
+    // On laisse un court délai pour laisser le fade-out se jouer côté overlay
+    // avant d'envoyer la piste suivante (le crossfade côté overlay gère la transition)
+    playNextInQueue();
+    return;
+  }
+
+  // ── Pièces jointes (images / vidéos / audio) ──
+  if (message.attachments.size === 0) return;
+
+  for (const attachment of message.attachments.values()) {
+    const layer = detectLayer(attachment.name);
+    if (!layer) continue; // type non supporté
+
+    let url = attachment.url;
+
+    // Optimisation qualité pour les images (CDN Discord)
+    if (isImage(attachment.name)) {
+      url += (url.includes('?') ? '&' : '?') + 'width=1600&quality=lossless';
+    }
+
+    const author = {
+      username: message.author.username,
+      avatar: message.author.displayAvatarURL({ extension: 'png', size: 128 }),
+    };
+
+    if (layer === 'audio') {
+      // L'audio passe par la file d'attente plutôt que d'être diffusé immédiatement
+      enqueueAudio({ url, filename: attachment.name, author });
+      continue;
+    }
+
+    broadcast({
+      type: 'media',
+      layer,
+      kind: isImage(attachment.name) ? 'image' : 'video',
+      url,
+      filename: attachment.name,
+      author,
+      timestamp: Date.now(),
+    });
+
+    console.log(`📤 Média envoyé → couche "${layer}": ${attachment.name}`);
+  }
+});
+
+client.login(DISCORD_TOKEN);
