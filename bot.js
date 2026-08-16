@@ -155,7 +155,7 @@ wss.on('connection', (ws) => {
 // Heartbeat : envoie un ping toutes les 25s à chaque client connecté.
 // Ça empêche les hébergeurs (Render, etc.) de considérer la connexion
 // comme inactive et de la couper automatiquement.
-const HEARTBEAT_INTERVAL = 25000;
+const HEARTBEAT_INTERVAL = 12000;
 
 setInterval(() => {
   wss.clients.forEach((ws) => {
