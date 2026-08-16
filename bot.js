@@ -98,7 +98,13 @@ function playNextInQueue() {
 // ─────────────────────────────────────────────
 // SERVEUR HTTP + WEBSOCKET
 // ─────────────────────────────────────────────
-const server = http.createServer();
+// Une réponse HTTP basique est nécessaire pour que le vérificateur de santé
+// de Render détecte correctement le port comme actif (sinon il ne voit
+// que le WebSocket et peut considérer le service comme "non sain").
+const server = http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.end('JDR Overlay bot en ligne.');
+});
 const wss = new WebSocketServer({ server });
 
 // clients authentifiés (apps Electron connectées)
@@ -171,7 +177,7 @@ function broadcast(payload) {
   }
 }
 
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`🌐 Serveur WebSocket en écoute sur le port ${PORT}`);
 });
 
