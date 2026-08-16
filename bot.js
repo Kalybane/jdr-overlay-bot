@@ -152,20 +152,20 @@ wss.on('connection', (ws) => {
   });
 });
 
-// Heartbeat : envoie un ping toutes les 25s à chaque client connecté.
-// Ça empêche les hébergeurs (Render, etc.) de considérer la connexion
-// comme inactive et de la couper automatiquement.
-const HEARTBEAT_INTERVAL = 12000;
+// Heartbeat : envoie un VRAI message JSON toutes les 10s à chaque client
+// connecté (plutôt qu'un simple ping bas niveau). Certains hébergeurs ne
+// comptent que les vraies données comme "trafic actif" pour décider de
+// couper ou non une connexion inactive — un ping protocolaire seul ne
+// suffisait apparemment pas avec Render.
+const HEARTBEAT_INTERVAL = 10000;
 
 setInterval(() => {
-  wss.clients.forEach((ws) => {
-    if (ws.isAlive === false) {
-      console.log('💀 Client sans réponse au ping, fermeture forcée');
-      return ws.terminate();
+  const message = JSON.stringify({ type: 'heartbeat', timestamp: Date.now() });
+  for (const ws of clients) {
+    if (ws.readyState === ws.OPEN) {
+      ws.send(message);
     }
-    ws.isAlive = false;
-    ws.ping();
-  });
+  }
 }, HEARTBEAT_INTERVAL);
 
 function broadcast(payload) {

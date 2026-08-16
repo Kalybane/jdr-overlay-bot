@@ -308,6 +308,10 @@
           reportStatus('disconnected');
           return;
         }
+        if (data.type === 'heartbeat') {
+          // Simple signal de vie envoyé par le serveur, rien à faire ici
+          return;
+        }
 
         if (data.type === 'settings' && data.layer === 'visual') {
           updateVisualSettings(data.settings);
