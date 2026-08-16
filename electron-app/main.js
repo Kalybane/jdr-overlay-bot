@@ -1,8 +1,10 @@
 const { app, BrowserWindow, screen, Tray, Menu, nativeImage, ipcMain } = require('electron');
 const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '.env') });
 
 // ─────────────────────────────────────────────
-// CONFIG (à adapter selon ton déploiement)
+// CONFIG — le vrai mot de passe vit UNIQUEMENT dans electron-app/.env
+// (jamais en dur ici, ce fichier main.js est public sur GitHub)
 // ─────────────────────────────────────────────
 const WS_URL = process.env.WS_URL || 'wss://jdr-overlay-bot.onrender.com';
 const WS_PASSWORD = process.env.WS_PASSWORD || 'change_moi_avec_un_mot_de_passe_fort';

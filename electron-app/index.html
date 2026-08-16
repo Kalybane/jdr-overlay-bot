@@ -286,9 +286,11 @@
     // CONNEXION WEBSOCKET
     // ─────────────────────────────────────────────
     function connect() {
+      console.log('[DEBUG] Tentative de connexion à', window.__WS_URL__);
       const ws = new WebSocket(window.__WS_URL__);
 
       ws.onopen = () => {
+        console.log('[DEBUG] WebSocket ouverte, envoi de l\'authentification...');
         ws.send(JSON.stringify({ type: 'auth', password: window.__WS_PASSWORD__ }));
       };
 
@@ -297,7 +299,12 @@
         try {
           data = JSON.parse(event.data);
         } catch {
+          console.log('[DEBUG] Message reçu non-JSON:', event.data);
           return;
+        }
+
+        if (data.type !== 'heartbeat') {
+          console.log('[DEBUG] Message reçu:', data.type);
         }
 
         if (data.type === 'auth_ok') {
@@ -345,12 +352,14 @@
         if (data.type === 'resume' && data.layer === 'audio') resumeAudio();
       };
 
-      ws.onclose = () => {
+      ws.onclose = (event) => {
+        console.log('[DEBUG] WebSocket fermée. Code:', event.code, 'Raison:', event.reason, 'Propre:', event.wasClean);
         reportStatus('disconnected');
         setTimeout(connect, 3000);
       };
 
-      ws.onerror = () => {
+      ws.onerror = (err) => {
+        console.log('[DEBUG] Erreur WebSocket:', err);
         ws.close();
       };
     }

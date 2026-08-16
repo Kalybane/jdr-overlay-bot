@@ -21,8 +21,12 @@
     },
     "files": [
       "**/*",
-      "!node_modules/electron-builder/**/*"
+      "!node_modules/electron-builder/**/*",
+      ".env"
     ]
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5"
   },
   "devDependencies": {
     "electron": "^30.0.0",
