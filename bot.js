@@ -35,7 +35,7 @@ function detectLayer(filename) {
 
 function isImage(filename) {
   const ext = getFileExtension(filename);
-  return ['png', 'jpg', 'jpeg', 'webp'].includes(ext);
+  return ['png', 'jpg', 'jpeg', 'webp', 'gif'].includes(ext);
 }
 
 function isVideo(filename) {
