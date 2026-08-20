@@ -343,6 +343,19 @@ client.on('error', (err) => {
   console.error('❌ Erreur du client Discord:', err);
 });
 
+client.on('shardError', (err) => {
+  console.error('❌ Erreur de shard Discord:', err);
+});
+
+// Si la connexion n'a toujours pas abouti après 20s, c'est le signe
+// d'un blocage réseau silencieux (ex: IP partagée bloquée côté Discord)
+// plutôt qu'une vraie erreur — utile pour distinguer les deux cas.
+setTimeout(() => {
+  if (!client.isReady()) {
+    console.error('❌ Toujours pas connecté à Discord après 20s — probable blocage réseau (IP partagée Render bloquée par Discord ?)');
+  }
+}, 20000);
+
 client.login(DISCORD_TOKEN).catch((err) => {
   console.error('❌ Échec de connexion à Discord:', err.message);
 });
