@@ -339,4 +339,10 @@ client.on('messageCreate', async (message) => {
   }
 });
 
-client.login(DISCORD_TOKEN);
+client.on('error', (err) => {
+  console.error('❌ Erreur du client Discord:', err);
+});
+
+client.login(DISCORD_TOKEN).catch((err) => {
+  console.error('❌ Échec de connexion à Discord:', err.message);
+});

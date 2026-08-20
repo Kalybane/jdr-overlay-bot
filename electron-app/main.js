@@ -15,10 +15,15 @@ let tray;
 // ─────────────────────────────────────────────
 // DÉMARRAGE AUTOMATIQUE AU LANCEMENT DE WINDOWS
 // ─────────────────────────────────────────────
-app.setLoginItemSettings({
-  openAtLogin: true,
-  openAsHidden: true, // ne pas ouvrir de fenêtre visible au démarrage, juste l'icône en tray
-});
+// Uniquement sur la version installée (packagée) — en dev (npm start),
+// ça pointerait vers le electron.exe brut de node_modules et ouvrirait
+// une fenêtre Electron générique au lieu de l'app au prochain démarrage.
+if (app.isPackaged) {
+  app.setLoginItemSettings({
+    openAtLogin: true,
+    openAsHidden: true, // ne pas ouvrir de fenêtre visible au démarrage, juste l'icône en tray
+  });
+}
 
 function createWindow() {
   const { width, height } = screen.getPrimaryDisplay().workAreaSize;
