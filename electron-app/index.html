@@ -58,6 +58,7 @@
           posY: null,
           durationMs: 8000,
           fadeMs: 800,
+          persistent: false,
         },
       },
       audio: {
@@ -133,7 +134,9 @@
         } else {
           el = document.createElement('img');
           el.src = payload.url;
-          state.visual.clearTimer = setTimeout(clearVisual, s.durationMs);
+          if (!s.persistent) {
+            state.visual.clearTimer = setTimeout(clearVisual, s.durationMs);
+          }
         }
 
         applyBoxSize(el, s.sizePx);
@@ -191,8 +194,8 @@
     // ─────────────────────────────────────────────
     // COUCHE AUDIO (avec crossfade + volume + file d'attente)
     // ─────────────────────────────────────────────
-    const CROSSFADE_DURATION = 3500; // ms — fondu entre deux pistes
-    const PAUSE_FADE_DURATION = 1200; // ms — fondu sur pause/reprise
+    const CROSSFADE_DURATION = 5000; // ms — fondu entre deux pistes
+    const PAUSE_FADE_DURATION = 2200; // ms — fondu sur pause/reprise
 
     // Fonction générique : fait varier le volume d'un lecteur audio en douceur
     function fadeVolume(player, toVolume, durationMs, onDone) {
@@ -228,6 +231,7 @@
       toPlayer.src = payload.url;
       toPlayer.volume = 0;
       toPlayer.currentTime = 0;
+      toPlayer.loop = !!payload.loop;
 
       const playPromise = toPlayer.play();
       if (playPromise) playPromise.catch(() => {});
@@ -327,6 +331,11 @@
 
         if (data.type === 'volume' && data.layer === 'audio') {
           setAudioVolume(data.volume);
+          return;
+        }
+
+        if (data.type === 'set_loop' && data.layer === 'audio') {
+          audioPlayers[state.audio.activePlayer].loop = !!data.loop;
           return;
         }
 

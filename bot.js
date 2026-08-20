@@ -59,6 +59,7 @@ const visualSettings = {
   posY: null,
   durationMs: 8000,
   fadeMs: 2000,
+  persistent: false, // si true, l'image reste affichée indéfiniment (pas d'auto-clear)
 };
 
 // ─────────────────────────────────────────────
@@ -66,6 +67,7 @@ const visualSettings = {
 // ─────────────────────────────────────────────
 const audioQueue = []; // { url, filename, author }
 let audioVolume = 100; // 0-100
+let audioLoop = false; // si true, la piste en cours (et les suivantes) tournent en boucle
 let currentlyPlaying = false;
 
 function enqueueAudio(track) {
@@ -90,6 +92,7 @@ function playNextInQueue() {
     filename: next.filename,
     author: next.author,
     volume: audioVolume / 100,
+    loop: audioLoop,
     timestamp: Date.now(),
   });
   console.log(`📤 Média envoyé → couche "audio": ${next.filename} (file d'attente: ${audioQueue.length} restante(s))`);
@@ -262,6 +265,20 @@ client.on('messageCreate', async (message) => {
     return;
   }
 
+  if (cmd === '!fixe') {
+    visualSettings.persistent = true;
+    broadcast({ type: 'settings', layer: 'visual', settings: visualSettings });
+    message.reply('🖼️ Les prochaines images resteront affichées jusqu\'à `!clear`.');
+    return;
+  }
+
+  if (cmd === '!normal') {
+    visualSettings.persistent = false;
+    broadcast({ type: 'settings', layer: 'visual', settings: visualSettings });
+    message.reply(`🖼️ Retour au mode normal (disparition après ${visualSettings.durationMs / 1000}s).`);
+    return;
+  }
+
   // ── Réglages AUDIO ──
   if (cmd === '!volume') {
     const vol = parseInt(args[0], 10);
@@ -271,6 +288,20 @@ client.on('messageCreate', async (message) => {
     }
     audioVolume = vol;
     broadcast({ type: 'volume', layer: 'audio', volume: audioVolume / 100 });
+    return;
+  }
+
+  if (cmd === '!loop') {
+    audioLoop = true;
+    broadcast({ type: 'set_loop', layer: 'audio', loop: true });
+    message.reply('🔁 La musique en cours (et les suivantes) tournera en boucle.');
+    return;
+  }
+
+  if (cmd === '!noloop') {
+    audioLoop = false;
+    broadcast({ type: 'set_loop', layer: 'audio', loop: false });
+    message.reply('▶️ Boucle désactivée.');
     return;
   }
 
